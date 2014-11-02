@@ -77,11 +77,28 @@ protected:
     void _start_read_scan_points();
     void _handle_read_scan_points( const boost::system::error_code& err, std::size_t bytes_transferred );
 
+    void _start_read_error_warning_data();
+    void _handle_read_error_warning_data( const boost::system::error_code& err, std::size_t bytes_transferred );
+
+    void _start_read_object_data_header();
+    void _handle_read_object_data_header( const boost::system::error_code& err, std::size_t bytes_transferred );
+
+    void _start_read_single_object_data();
+    void _handle_read_single_object_data( const boost::system::error_code& err, std::size_t bytes_transferred );
+
+    void _start_read_object_data_contours();
+    void _handle_read_object_data_contours( const boost::system::error_code& err, std::size_t bytes_transferred );
+
     static void _make_cmd_header( std::vector<char>& buf, uint32_t message_data_size );
     static void _make_cmd_reset( std::vector<char>& buf );
     static void _make_cmd_get_status( std::vector<char>& buf );
     static void _make_cmd_start_measure( std::vector<char>& buf );
     static void _make_cmd_stop_measure( std::vector<char>& buf );
+    static void _make_cmd_save_config( std::vector<char>& buf );
+    static void _make_cmd_set_parameter( std::vector<char>& buf, uint16_t parameter_index, uint32_t parameter );
+    static void _make_cmd_get_parameter( std::vector<char>& buf, uint16_t parameter_index );
+    static void _make_cmd_reset_default_parameters( std::vector<char>& buf );
+    static void _make_cmd_set_ntp_timestamp_sync( std::vector<char>& buf, uint32_t seconds, uint32_t fractional_seconds );
 
     static void _ntoh_MessageHeader( MessageHeader& h );
 
@@ -99,6 +116,10 @@ protected:
 
     MessageHeader m_current_header;
     ScanDataHeader m_current_scan_data_header;
+    ObjectDataHeader m_current_object_data_header;
+    Object m_current_object_data;
+    uint16_t m_remaining_objects;
+    std::vector<Point2D> m_current_object_contour_points;
     std::vector<ScanPoint> m_current_scan_points;
 
     boost::asio::streambuf m_response_buf;

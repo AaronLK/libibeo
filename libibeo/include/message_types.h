@@ -53,6 +53,58 @@ struct ScanPoint
     uint16_t            EchoPulseWidth;
     uint16_t            Reserved;
 };
+
+struct ObjectDataHeader
+{
+    uint64_t            ScanStartTimestamp;
+    uint16_t            ObjectCount;
+};
+
+struct Point2D
+{
+    int16_t             X;
+    int16_t             Y;
+};
+
+struct Size2D
+{
+    uint16_t            Width;
+    uint16_t            Length; // referred to as Length in the docs, so it will here too.
+};
+
+struct Object
+{
+    uint16_t            ObjectID;
+    uint16_t            ObjectAge;
+    uint16_t            ObjectPreductionAge;
+    uint16_t            RelativeTimestampMS;
+    Point2D             ReferencePoint;
+    Point2D             ReferencePointSigma;
+    Point2D             ClosestPoint;
+    Point2D             BoundingBoxCenter;
+    uint16_t            BoundingBoxWidth;
+    uint16_t            BoundingBoxLength;
+    Point2D             ObjectBoxCenter;
+    Size2D              ObjectBoxSize;
+    int16_t             ObjectBoxOrientation;
+    Point2D             AbsoluteVelocity;
+    Size2D              AbsoluteVelocitySigma;
+    Point2D             RelativeVelocity;
+    uint16_t            Classification;
+    uint16_t            ClassificationAge;
+    uint16_t            ClassificationCertainty;
+    uint16_t            ContourPointCount;
+};
+
+struct ErrorWarning
+{
+    uint16_t            ErrorRegister1;
+    uint16_t            ErrorRegister2;
+    uint16_t            WarningRegister1;
+    uint16_t            WarningRegister2;
+    uint16_t            Reserved[4];
+};
+
 #pragma pack(pop)
 
 

@@ -37,7 +37,7 @@ int main( int argc, char** argv )
 
     printf( "Connected.\n" );
 
-    boost::this_thread::sleep( boost::posix_time::seconds(5) );
+    boost::this_thread::sleep( boost::posix_time::seconds(30) );
 
 
     printf( "Disconnecting.\n" );

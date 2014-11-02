@@ -219,6 +219,14 @@ void LUX::_handle_read_header( const boost::system::error_code& err, std::size_t
         _start_read_scan_data_header();
         break;
 
+    case ObjectData:
+        _start_read_object_data_header();
+        break;
+
+    case ErrorWarningData:
+        _start_read_error_warning_data();
+        break;
+
     default:
         // unknown data type. consume the message data,
         // report error and go back to reading headers
@@ -320,6 +328,147 @@ void LUX::_handle_read_scan_points( const boost::system::error_code& err, std::s
 }
 
 
+void LUX::_start_read_error_warning_data( )
+{
+    printf( "starting error warning data read.\n" );
+
+    boost::asio::async_read( m_socket, m_response_buf, boost::asio::transfer_at_least(sizeof(ErrorWarning)),
+        boost::bind( &LUX::_handle_read_error_warning_data, shared_from_this(),
+                    boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred ) );
+}
+
+
+void LUX::_handle_read_error_warning_data( const boost::system::error_code& err, std::size_t bytes_transferred )
+{
+    if( err )
+    {
+        printf( "error in _handle_read_error_warning_data\n" );
+        return;
+    }
+
+    printf( "_handle_read_error_warning_data complete with %zu bytes\n", bytes_transferred );
+
+    const ErrorWarning* err_warn_buf= boost::asio::buffer_cast<const ErrorWarning*>( m_response_buf.data() );
+
+    ErrorWarning err_warn;
+    memcpy( &err_warn, err_warn_buf, sizeof(ErrorWarning) );
+
+    m_response_buf.consume( sizeof(ErrorWarning) );
+
+    // go back to the beginning
+    _start_read_header_magic();
+}
+
+
+void LUX::_start_read_object_data_header()
+{
+    printf( "starting object data header read.\n" );
+
+    boost::asio::async_read( m_socket, m_response_buf, boost::asio::transfer_at_least(sizeof(ObjectDataHeader)),
+        boost::bind( &LUX::_handle_read_object_data_header, shared_from_this(),
+                    boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred ) );
+}
+
+
+void LUX::_handle_read_object_data_header( const boost::system::error_code& err, std::size_t bytes_transferred )
+{
+    if( err )
+    {
+        printf( "error in _handle_read_object_data_header\n" );
+        return;
+    }
+
+
+    printf( "_handle_read_object_data_header complete with %zu bytes\n", bytes_transferred );
+
+    const ObjectDataHeader* hdr_buf= boost::asio::buffer_cast<const ObjectDataHeader*>( m_response_buf.data() );
+    m_current_object_data_header= *hdr_buf;
+
+    m_response_buf.consume( sizeof(ObjectDataHeader) );
+
+    m_remaining_objects= m_current_object_data_header.ObjectCount;
+    printf( "Object Count: %d\n", m_current_object_data_header.ObjectCount );
+
+    // start to read object data
+    _start_read_single_object_data();
+}
+
+
+void LUX::_start_read_single_object_data()
+{
+    // read just one object, we don't know how many contour points
+    // it has until we read it. so do this over for all objects one at a time
+
+    printf( "starting single object data read.\n" );
+
+    boost::asio::async_read( m_socket, m_response_buf, boost::asio::transfer_at_least(sizeof(ObjectData)),
+        boost::bind( &LUX::_handle_read_single_object_data, shared_from_this(),
+                    boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred ) );
+}
+
+
+void LUX::_handle_read_single_object_data( const boost::system::error_code& err, std::size_t bytes_transferred )
+{
+    if( err )
+    {
+        printf( "error in _handle_read_single_object_data\n" );
+        return;
+    }
+
+    printf( "_handle_read_single_object_data complete with %zu bytes\n", bytes_transferred );
+
+    const Object* data_buf= boost::asio::buffer_cast<const Object*>( m_response_buf.data() );
+    m_current_object_data= *data_buf;
+
+    m_response_buf.consume( sizeof(Object) );
+
+    printf( "Object Contour Count: %d\n", m_current_object_data.ContourPointCount );
+
+    _start_read_object_data_contours();
+}
+
+
+void LUX::_start_read_object_data_contours()
+{
+    printf( "starting object data contour point read.\n" );
+
+    boost::asio::async_read( m_socket, m_response_buf, boost::asio::transfer_at_least(sizeof(Point2D)*m_current_object_data.ContourPointCount),
+        boost::bind( &LUX::_handle_read_object_data_contours, shared_from_this(),
+                    boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred ) );
+}
+
+
+void LUX::_handle_read_object_data_contours( const boost::system::error_code& err, std::size_t bytes_transferred )
+{
+    if( err )
+    {
+        printf( "error in _handle_read_object_data_contours\n" );
+        return;
+    }
+
+    // this is the last bit of the current object
+    m_remaining_objects--;
+
+    printf( "_handle_read_object_data_contours complete with %zu bytes\n", bytes_transferred );
+
+    const Point2D* point_buf= boost::asio::buffer_cast<const Point2D*>( m_response_buf.data() );
+    m_current_object_contour_points.resize( m_current_object_data.ContourPointCount );
+    memcpy( &m_current_object_contour_points[0], point_buf, sizeof(Point2D)*m_current_object_data.ContourPointCount );
+
+    m_response_buf.consume( sizeof(Point2D)*m_current_object_data.ContourPointCount );
+
+    // if this was the contours for the last object, go back to reading the next header
+    if( m_remaining_objects == 0 )
+    {
+        _start_read_header_magic();
+        return;
+    }
+
+    // otherwise, get the next object
+    _start_read_single_object_data();
+}
+
+
 // build as network endian ready for transport
 void LUX::_make_cmd_header( std::vector<char>& buf, uint32_t message_data_size )
 {
@@ -383,6 +532,72 @@ void LUX::_make_cmd_stop_measure( std::vector<char>& buf )
 
     *reinterpret_cast<uint16_t*>(&buf[0])= Command::StopMeasure;
     *reinterpret_cast<uint16_t*>(&buf[2])= 0;                 // reserved
+}
+
+
+// no args
+void LUX::_make_cmd_save_config( std::vector<char>& buf )
+{
+    const int cmd_size= 4;
+
+    _make_cmd_header( buf, cmd_size );
+    buf.insert( buf.end(), cmd_size );
+
+    *reinterpret_cast<uint16_t*>(&buf[0])= Command::SaveConfig;
+    *reinterpret_cast<uint16_t*>(&buf[2])= 0;                 // reserved
+}
+
+
+void LUX::_make_cmd_set_parameter( std::vector<char>& buf, uint16_t parameter_index, uint32_t parameter )
+{
+    const int cmd_size= 10;
+
+    _make_cmd_header( buf, cmd_size );
+    buf.insert( buf.end(), cmd_size );
+
+    *reinterpret_cast<uint16_t*>(&buf[0])= Command::SetParameter;
+    *reinterpret_cast<uint16_t*>(&buf[2])= 0;                 // reserved
+    *reinterpret_cast<uint16_t*>(&buf[4])= parameter_index;
+    *reinterpret_cast<uint32_t*>(&buf[6])= parameter;
+}
+
+
+void LUX::_make_cmd_get_parameter( std::vector<char>& buf, uint16_t parameter_index )
+{
+    const int cmd_size= 6;
+
+    _make_cmd_header( buf, cmd_size );
+    buf.insert( buf.end(), cmd_size );
+
+    *reinterpret_cast<uint16_t*>(&buf[0])= Command::GetParameter;
+    *reinterpret_cast<uint16_t*>(&buf[2])= 0;                 // reserved
+    *reinterpret_cast<uint16_t*>(&buf[4])= parameter_index;
+}
+
+// no args
+void LUX::_make_cmd_reset_default_parameters( std::vector<char>& buf )
+{
+    const int cmd_size= 4;
+
+    _make_cmd_header( buf, cmd_size );
+    buf.insert( buf.end(), cmd_size );
+
+    *reinterpret_cast<uint16_t*>(&buf[0])= Command::ResetDefaultParameters;
+    *reinterpret_cast<uint16_t*>(&buf[2])= 0;                 // reserved
+}
+
+void LUX::_make_cmd_set_ntp_timestamp_sync( std::vector<char>& buf, uint32_t seconds, uint32_t fractional_seconds )
+{
+    const int cmd_size= 14;
+
+    _make_cmd_header( buf, cmd_size );
+    buf.insert( buf.end(), cmd_size );
+
+    *reinterpret_cast<uint16_t*>(&buf[0])= Command::SetNTPTimestampSync;
+    *reinterpret_cast<uint16_t*>(&buf[2])= 0;                 // reserved
+    *reinterpret_cast<uint16_t*>(&buf[4])= 0;                 // reserved
+    *reinterpret_cast<uint32_t*>(&buf[6])= seconds;
+    *reinterpret_cast<uint32_t*>(&buf[10])= fractional_seconds;
 }
 
 
