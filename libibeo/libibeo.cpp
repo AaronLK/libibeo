@@ -5,7 +5,7 @@
 libibeo: client library to interface with ibeo LUX laser scanners
 
 
-Copyright 2014, Aaron Klingaman, Limitedslip Engineering
+Copyright 2014, Aaron Klingaman, Limitedslip Engineering, LLC
 
 This library is free software; you can redistribute it and/or
 modify it under the terms of the GNU Lesser General Public
@@ -122,6 +122,28 @@ bool LUX::reset()
 const std::string& LUX::last_error()
 {
     return m_last_error;
+}
+
+
+void LUX::register_error_warning_handler( ErrorWarningHandler ew_handler )
+{
+    boost::mutex::scoped_lock lock(m_ew_handler_mutex);
+
+    m_ew_handler= ew_handler;
+}
+
+void LUX::register_scan_points_handler( ScanPointsHandler points_handler )
+{
+    boost::mutex::scoped_lock lock(m_points_handler_mutex);
+
+    m_points_handler= points_handler;
+}
+
+void LUX::register_scan_objects_handler( ScanObjectsHandler objects_handler )
+{
+    boost::mutex::scoped_lock lock(m_objects_handler_mutex);
+
+    m_objects_handler= objects_handler;
 }
 
 // -----------------------------
@@ -272,14 +294,14 @@ void LUX::_handle_read_scan_data_header( const boost::system::error_code& err, s
     printf( "_handle_read_scan_data_header complete with %zu bytes\n", bytes_transferred );
 
     const ScanDataHeader* hdr_buf= boost::asio::buffer_cast<const ScanDataHeader*>( m_response_buf.data() );
-    m_current_scan_data_header= *hdr_buf;
+    m_current_scan_data.Header= *hdr_buf;
     m_response_buf.consume( sizeof(ScanDataHeader) );
 
-    printf( "ScanNumber: %d\n", m_current_scan_data_header.ScanNumber );
-    printf( "ScanPointCount: %d\n", m_current_scan_data_header.ScanPointCount );
+    printf( "ScanNumber: %d\n", m_current_scan_data.Header.ScanNumber );
+    printf( "ScanPointCount: %d\n", m_current_scan_data.Header.ScanPointCount );
 
     // sanity check
-    if( m_current_scan_data_header.ScanPointCount * sizeof(ScanPoint) + \
+    if( m_current_scan_data.Header.ScanPointCount * sizeof(ScanPoint) + \
        sizeof(ScanDataHeader) != m_current_header.MessageSize )
     {
         printf( "unexpected length in scan data.\n" );
@@ -297,7 +319,7 @@ void LUX::_start_read_scan_points()
 {
     printf( "starting scan data header read.\n" );
 
-    boost::asio::async_read( m_socket, m_response_buf, boost::asio::transfer_at_least(sizeof(ScanPoint)*m_current_scan_data_header.ScanPointCount),
+    boost::asio::async_read( m_socket, m_response_buf, boost::asio::transfer_at_least(sizeof(ScanPoint)*m_current_scan_data.Header.ScanPointCount),
         boost::bind( &LUX::_handle_read_scan_points, shared_from_this(),
                     boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred ) );
 }
@@ -311,20 +333,29 @@ void LUX::_handle_read_scan_points( const boost::system::error_code& err, std::s
         return;
     }
 
-    printf( "_handle_read_scan_points complete with %zu bytes (%d points)\n", bytes_transferred, m_current_scan_data_header.ScanPointCount );
+    printf( "_handle_read_scan_points complete with %zu bytes (%d points)\n",
+           bytes_transferred, m_current_scan_data.Header.ScanPointCount );
 
     const ScanPoint* point_buf= boost::asio::buffer_cast<const ScanPoint*>( m_response_buf.data() );
-    m_current_scan_points.resize( m_current_scan_data_header.ScanPointCount );
-    memcpy( &m_current_scan_points[0], point_buf, sizeof(ScanPoint)*m_current_scan_data_header.ScanPointCount );
+    m_current_scan_data.Points.resize( m_current_scan_data.Header.ScanPointCount );
+    memcpy( &m_current_scan_data.Points[0], point_buf, sizeof(ScanPoint)*m_current_scan_data.Header.ScanPointCount );
 
-    m_response_buf.consume( sizeof(ScanPoint)*m_current_scan_data_header.ScanPointCount );
+    m_response_buf.consume( sizeof(ScanPoint)*m_current_scan_data.Header.ScanPointCount );
 
-    for( size_t i= 0; i < 10; ++i )
-        printf( "got scan point angle/distance: %d %d\n", m_current_scan_points[i].HorizontalAngle,
-               m_current_scan_points[i].RadialDistance );
+    // make a copy for the callback
+    ScanDataPoints pts_copy= m_current_scan_data;
 
     // go back to the beginning
     _start_read_header_magic();
+
+    {
+        boost::mutex::scoped_lock lock(m_points_handler_mutex);
+
+        if( m_points_handler )
+        {
+            m_points_handler( pts_copy );
+        }
+    }
 }
 
 
@@ -357,6 +388,15 @@ void LUX::_handle_read_error_warning_data( const boost::system::error_code& err,
 
     // go back to the beginning
     _start_read_header_magic();
+
+    {
+        boost::mutex::scoped_lock lock(m_ew_handler_mutex);
+
+        if( m_ew_handler )
+        {
+            m_ew_handler( err_warn );
+        }
+    }
 }
 
 
@@ -382,12 +422,12 @@ void LUX::_handle_read_object_data_header( const boost::system::error_code& err,
     printf( "_handle_read_object_data_header complete with %zu bytes\n", bytes_transferred );
 
     const ObjectDataHeader* hdr_buf= boost::asio::buffer_cast<const ObjectDataHeader*>( m_response_buf.data() );
-    m_current_object_data_header= *hdr_buf;
+    m_current_objects_data.Header= *hdr_buf;
 
     m_response_buf.consume( sizeof(ObjectDataHeader) );
 
-    m_remaining_objects= m_current_object_data_header.ObjectCount;
-    printf( "Object Count: %d\n", m_current_object_data_header.ObjectCount );
+    m_remaining_objects= m_current_objects_data.Header.ObjectCount;
+    printf( "Object Count: %d\n", m_current_objects_data.Header.ObjectCount );
 
     // start to read object data
     _start_read_single_object_data();
@@ -418,11 +458,11 @@ void LUX::_handle_read_single_object_data( const boost::system::error_code& err,
     printf( "_handle_read_single_object_data complete with %zu bytes\n", bytes_transferred );
 
     const Object* data_buf= boost::asio::buffer_cast<const Object*>( m_response_buf.data() );
-    m_current_object_data= *data_buf;
+    m_current_object.Obj= *data_buf;
 
     m_response_buf.consume( sizeof(Object) );
 
-    printf( "Object Contour Count: %d\n", m_current_object_data.ContourPointCount );
+    printf( "Object Contour Count: %d\n", m_current_object.Obj.ContourPointCount );
 
     _start_read_object_data_contours();
 }
@@ -432,9 +472,10 @@ void LUX::_start_read_object_data_contours()
 {
     printf( "starting object data contour point read.\n" );
 
-    boost::asio::async_read( m_socket, m_response_buf, boost::asio::transfer_at_least(sizeof(Point2D)*m_current_object_data.ContourPointCount),
-        boost::bind( &LUX::_handle_read_object_data_contours, shared_from_this(),
-                    boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred ) );
+    boost::asio::async_read( m_socket, m_response_buf,
+                            boost::asio::transfer_at_least(sizeof(Point2D)*m_current_object.Obj.ContourPointCount),
+                    boost::bind( &LUX::_handle_read_object_data_contours, shared_from_this(),
+                        boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred ) );
 }
 
 
@@ -452,20 +493,37 @@ void LUX::_handle_read_object_data_contours( const boost::system::error_code& er
     printf( "_handle_read_object_data_contours complete with %zu bytes\n", bytes_transferred );
 
     const Point2D* point_buf= boost::asio::buffer_cast<const Point2D*>( m_response_buf.data() );
-    m_current_object_contour_points.resize( m_current_object_data.ContourPointCount );
-    memcpy( &m_current_object_contour_points[0], point_buf, sizeof(Point2D)*m_current_object_data.ContourPointCount );
+    m_current_object.Contour.resize( m_current_object.Obj.ContourPointCount );
+    memcpy( &m_current_object.Contour[0], point_buf, sizeof(Point2D)*m_current_object.Obj.ContourPointCount );
 
-    m_response_buf.consume( sizeof(Point2D)*m_current_object_data.ContourPointCount );
+    m_current_objects_data.Objects.push_back( m_current_object );
+
+    m_response_buf.consume( sizeof(Point2D)*m_current_object.Obj.ContourPointCount );
 
     // if this was the contours for the last object, go back to reading the next header
-    if( m_remaining_objects == 0 )
+    if( m_remaining_objects > 0 )
     {
-        _start_read_header_magic();
+        // get the next object
+        _start_read_single_object_data();
         return;
     }
 
-    // otherwise, get the next object
-    _start_read_single_object_data();
+    // make a copy for the callback
+    ScanDataObjects objects_cpy= m_current_objects_data;
+
+
+    _start_read_header_magic();
+
+    {
+        boost::mutex::scoped_lock lock(m_objects_handler_mutex);
+
+        if( m_objects_handler )
+        {
+            m_objects_handler( objects_cpy );
+        }
+    }
+
+
 }
 
 

@@ -1,5 +1,8 @@
 #pragma once
 
+
+#include <vector>
+
 namespace ibeo
 {
 
@@ -7,6 +10,8 @@ namespace ibeo
 const uint32_t MagicWordValue = 0xAFFEC0C2;
 
 
+
+// type definitions for the wire
 
 #pragma pack(push)
 #pragma pack(1)
@@ -107,6 +112,25 @@ struct ErrorWarning
 
 #pragma pack(pop)
 
+
+// these are the external data types of interest
+struct ScanDataPoints
+{
+    ScanDataHeader Header;
+    std::vector<ScanPoint> Points;
+};
+
+struct ScanDataObject
+{
+    Object Obj;
+    std::vector<Point2D> Contour;
+};
+
+struct ScanDataObjects
+{
+    ObjectDataHeader Header;
+    std::vector<ScanDataObject> Objects;
+};
 
 
 enum DataType
