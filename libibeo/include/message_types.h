@@ -27,6 +27,26 @@ struct MessageHeader
     uint64_t            NTPTime;
 };
 
+struct StatusMessage
+{
+    uint16_t            FirmwareVersion;
+    uint16_t            FPGAVersion;
+    uint16_t            ScannerStatus;
+    uint32_t            Reserved1;
+    uint16_t            Temperature;
+    uint16_t            SerialNumber0;
+    uint16_t            SerialNumber1;
+    uint16_t            Reserved2;
+    uint16_t            FPGATimeStamp[3];
+    uint16_t            DSPTimeStamp[3];
+};
+
+struct Parameter
+{
+    uint16_t            Index;
+    uint32_t            Value;
+};
+
 struct ScanDataHeader
 {
     // these are transferred in little endian byte order
@@ -202,6 +222,7 @@ enum ParameterIndex
     VehicleMotionDataFlags =        0x1210,
     DeviceType =                    0x3301
 };
+
 
 
 }
